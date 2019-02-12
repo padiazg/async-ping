@@ -1,0 +1,20 @@
+{
+  "name": "async-ping",
+  "version": "1.0.0",
+  "description": "Asynchronously ping an OpenFaaS stack",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "debug": "^4.1.1",
+    "express": "^4.16.4",
+    "influx": "^5.0.7",
+    "request": "^2.88.0",
+    "request-promise-native": "^1.0.5",
+    "uuid": "^3.3.2"
+  }
+}
