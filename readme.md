@@ -32,6 +32,11 @@ $ node .
 To visualize the data I use a Grafana panel, the exported JSON is in [grafana-panel.json](./grafana-panel.json).
 I set an alert that fires when there are 3 timedout measurement in a 5 min window, you can send that alert through whichever channel you like or have.
 
+Alert is set as
+* Evaluate every 60s
+* Conditions: sum() of query(C,5m,now) is above 3
+* If no data or all values are null SET STATE TO Ok
+
 # Mess with the data
 To query the database it must exist, pretty obviuos, so the node.js project must run at least once.
 

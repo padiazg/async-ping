@@ -20,16 +20,13 @@ const OPENFAAS_GATEWAY = 'http://localhost:8080';
 const CALLBACK_URL = 'http://10.9.100.111:3008/webhook';
 
 // timeout for receiving the pong, in my scenario they
-const TIMEOUT = 1000; // ms
+const TIMEOUT = 2000; // ms
 
 // interval between pings
 const INTERVAL = 60 * 1000; // 1m
 
 // where to store the values we send to the function, to check when it cames back
 const pings = new Map();
-
-// the timeout timer handler, to clear it when we receive the pong
-let t1 = null;
 
 // the database instance we will use here
 const influx = new Influx.InfluxDB({
@@ -48,53 +45,53 @@ const influx = new Influx.InfluxDB({
 
 const app = express();
 
-// the endpoint we expose to receive the callback
-app.post('/webhook', async (req, res) => {
-    // debug("webhook headers =>", req.headers);
+// what to do when we receive a pong
+const saveReceived = id => new Promise((resolve, reject) => {
+    const point = { measurement: 'roundtrips' };
+    debug(`saveReceived | ${id}`);
 
-    // what to do when we receive a pong
-    const saveReceived = id => new Promise((resolve, reject) => {
-        const point = { measurement: 'roundtrips' };
+    // try to delete the id from the list
+    if (pings.has(id)) {
+        debug(`saveReceived | ${id} completed`);
+
+        const item = pings.get(id);
 
         // clear the timeout timer
         // IMPROVEMENT: save the timer id with the ping id, so we clear the
         // timeout only if we get the corresponding id that setted it.
-        if (t1) {
-            debug(`saveReceived | borrando timeout anterior`);
-            clearTimeout(t1);
-            t1 = null;
+        if (item.t) {
+            debug(`saveReceived | clearing timeout`);
+            clearTimeout(item.t);
         }
 
-        // try to delete the id from the list
-        if (pings.has(id)) {
-            debug(`saveReceived | ${id} completado`);
+        pings.delete(id);
+        debug(`saveReceived | ${id} removed`);
 
-            const item = pings.get(id);
-            debug(`saveReceived | Recuperado ${JSON.stringify(item)}`);
-            pings.delete(id);
-            debug(`saveReceived | ${id} borrado`);
+        point.tags = { status: COMPLETED };
+        point.fields = { duration: Date.now() - item.start };
+    } // if (!ping.has(id))  ...
+    else {  // we received a not listed id, maybe a timedout one?
+        debug(`saveReceived | ${id} not listed`);
+        point.tags = { status: NOT_LISTED };
+        point.fields = { duration: 0 };
+    }
 
-            point.tags = { status: COMPLETED };
-            point.fields = { duration: Date.now() - item };
-        } // if (!ping.has(id))  ...
-        else {  // we received a not listed id, maybe a timedout one?
-            debug(`saveReceived | ${id} no listado`);
-            point.tags = { status: NOT_LISTED };
-            point.fields = { duration: 0 };
-        }
+    // save it to the database
+    influx
+    .writePoints([point])
+    .then(() => {
+        debug(`saveReceived | ${id} saved`);
+        resolve(true);
+    })
+    .catch(e => {
+        debug(`saveReceived | ${id} error => ${e}`);
+        reject(`saveReceived > ${e}`);
+    });
+}); // saveReceived ...
 
-        // save it to the database
-        influx
-            .writePoints([point])
-            .then(() => {
-                debug(`saveReceived | ${id} guardado`);
-                resolve(true);
-            })
-            .catch(e => {
-                debug(`saveReceived | ${id} error => ${e}`);
-                reject(`saveReceived > ${e}`);
-            });
-    }); // saveReceived ...
+// the endpoint we expose to receive the callback
+app.post('/webhook', (req, res) => {
+    // debug("webhook headers =>", req.headers);
 
     // payload received at body
     if (req.body) {
@@ -109,20 +106,20 @@ app.post('/webhook', async (req, res) => {
         let received = '';
 
         req.on('data', data => {
-            debug('webhook | data');
+            // debug('webhook | data');
             received += data.toString();
         });
 
         req.on('end', () => {
-            debug('webhook | received =>', received);
+            debug('<< webhook | received =>', received);
             saveReceived(received)
                 .then(() => res.status(200).end())
                 .catch(e => res.status(500).end(e.message));
         });
 
         req.on('error', error => {
-            debug('on/error');
-            console.error('webhook/Error =>', error);
+            // debug('on/error');
+            console.error('webhook | error =>', error);
         });
     }
 }); // webhook ...
@@ -147,8 +144,8 @@ influx
     .catch(e => console.log(`Error creating Influx Database!`));
 
 // If we dont get a pong in certain amount of time
-const timedOut = id => {
-    debug(`timedOut | ${id} expirado`);
+const timedOut = id => () => {
+    debug(`timedOut | ${id} expired`);
 
     let elapsed = 0;
 
@@ -156,9 +153,9 @@ const timedOut = id => {
     if (pings.has(id)) {
         const item = pings.get(id);
         pings.delete(id);
-        debug(`timedOut | ${id} borrado`);
+        debug(`timedOut | ${id} removed`);
 
-        elapsed = Date.now() - item;
+        elapsed = Date.now() - item.start;
     } // if (pings.has(id)) ...
 
     // save it to the database
@@ -169,30 +166,61 @@ const timedOut = id => {
     }]);
 }; // timedOut ...
 
+const generatePing = () => new Promise((resolve, reject) => {
+    try {
+        // the payload for our ping
+        const id = uuid();
+        debug(`*****************************************************************`);
+        debug(`   ${id}`);
+        debug(`*****************************************************************`);
+
+        // save the id to check it later
+        pings.set(id, {
+            start: Date.now(),
+            t: setTimeout(timedOut(id), TIMEOUT)
+        });
+
+        resolve(id)
+    }
+    catch(e) { reject(`generatePing > ${e}`); }
+    ;
+});
+
 // the ping loop
-setInterval(() => {
-    // the payload for our ping
-    const id = uuid();
+setInterval(async () => {
+    try {
+        const id = await generatePing();
+        const result = await request({
+            method: 'POST',
+            headers: { 'X-Callback-Url': CALLBACK_URL },
+            uri: `${OPENFAAS_GATEWAY}/async-function/echoit`,
+            body: id,
+            proxy: null,
+            resolveWithFullResponse: true
+        });
 
+    }
+    catch(e) {
+        debug(`timer | ${id} error => ${e}`);
+        const p = pings.get(id);
+        if (p) clearTimeout(p.t);
+    }
     // send ping
-    request({
-        method: 'POST',
-        headers: { 'X-Callback-Url': CALLBACK_URL },
-        uri: `${OPENFAAS_GATEWAY}/async-function/echoit`,
-        body: id,
-        proxy: null,
-        resolveWithFullResponse: true
-    })
-        .then(response => {
-            debug(`timer | ${id} status => ${response.statusCode}`);
-
-            // save the id to check it later
-            pings.set(id, Date.now());
-
-            // set the timeout timer
-            t1 = setTimeout(timedOut, TIMEOUT);
-        })
-        .catch(e => debug(`timer | ${id} error => ${e}`));
+    // request({
+    //     method: 'POST',
+    //     headers: { 'X-Callback-Url': CALLBACK_URL },
+    //     uri: `${OPENFAAS_GATEWAY}/async-function/echoit`,
+    //     body: id,
+    //     proxy: null,
+    //     resolveWithFullResponse: true
+    // })
+    //     .then(response => {
+    //         debug(`timer | ${id} sent`);
+    //         // set the timeout timer
+    //
+    //     })
+    //     .catch(e => {
+    //     });
 }, INTERVAL);
 
 /*=============================================================================
@@ -206,7 +234,7 @@ function exitHandler({ cleanup = false, exit = true }, exitCode) {
         //   model.cleanup();
         // }
         // influx.close();
-        console.log('Salida limpia');
+        console.log('Clean exit');
     }
 
     if (exitCode || exitCode === 0) {

@@ -20,7 +20,7 @@
         },
         "reducer": {
           "params": [],
-          "type": "count"
+          "type": "sum"
         },
         "type": "query"
       }
@@ -133,6 +133,7 @@
           "type": "fill"
         }
       ],
+      "hide": false,
       "measurement": "roundtrips",
       "orderByTime": "ASC",
       "policy": "default",
