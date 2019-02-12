@@ -5,28 +5,34 @@ const request = require('request-promise-native');
 const uuid = require('uuid/v4');
 const debug = require('debug')('index');
 
-const NOT_LISTED = 'not-listed';
-const TIMEDOUT = 'timedout';
-const COMPLETED = 'completed';
-
 // you can use localhost here if the docker where you run influx is in the same
 // host.
-const INFLUX_HOST = '10.22.1.152';
+const INFLUX_HOST = process.env.AP_INFLUX_HOST ; //'10.22.1.152';
 
 // you can use localhost here, if OpenFaaS is running in the same host.
-const OPENFAAS_GATEWAY = 'http://localhost:8080';
+const OPENFAAS_GATEWAY = process.env.AP_OPENFAAS_GATEWAY; // 'http://10.22.1.80:8080';
 
 // don't use localhost here, as this is the url must be reachable by the queue-worker-
-const CALLBACK_URL = 'http://10.9.100.111:3008/webhook';
+const CALLBACK_URL = process.env.AP_CALLBACK_URL;  //'http://10.9.100.111:3008/webhook';
+
+
+if (!INFLUX_HOST || !OPENFAAS_GATEWAY || !CALLBACK_URL) {
+    console.log("You must set this environment variables: AP_INFLUX_HOST, AP_OPENFAAS_GATEWAY, AP_CALLBACK_UR");
+    process.exit(1);
+} // if (!INFLUX_HOST || !OPENFAAS_GATEWAY || !CALLBACK_URL) ...
 
 // timeout for receiving the pong, in my scenario they
-const TIMEOUT = 2000; // ms
+const TIMEOUT = process.env.AP_TIMEOUT || 1000; // ms
 
 // interval between pings
-const INTERVAL = 60 * 1000; // 1m
+const INTERVAL = process.env.AP_INTERVAL || 60 * 1000; // 1m
 
 // where to store the values we send to the function, to check when it cames back
 const pings = new Map();
+
+const NOT_LISTED = 'not-listed';
+const TIMEDOUT = 'timedout';
+const COMPLETED = 'completed';
 
 // the database instance we will use here
 const influx = new Influx.InfluxDB({
@@ -205,22 +211,6 @@ setInterval(async () => {
         const p = pings.get(id);
         if (p) clearTimeout(p.t);
     }
-    // send ping
-    // request({
-    //     method: 'POST',
-    //     headers: { 'X-Callback-Url': CALLBACK_URL },
-    //     uri: `${OPENFAAS_GATEWAY}/async-function/echoit`,
-    //     body: id,
-    //     proxy: null,
-    //     resolveWithFullResponse: true
-    // })
-    //     .then(response => {
-    //         debug(`timer | ${id} sent`);
-    //         // set the timeout timer
-    //
-    //     })
-    //     .catch(e => {
-    //     });
 }, INTERVAL);
 
 /*=============================================================================
